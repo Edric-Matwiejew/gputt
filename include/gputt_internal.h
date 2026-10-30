@@ -70,8 +70,25 @@ SOFTWARE.
 #define gpuStreamDestroy hipStreamDestroy
 #define gpuSuccess hipSuccess
 #else // __HIPCC__
+#include <cuda_runtime.h>
+
+// CUDA 13 removed these clock fields; retain them for the cached device model.
+struct gpuDeviceProp_t : cudaDeviceProp {
+  int clockRate;
+  int memoryClockRate;
+};
+
+inline cudaError_t gpuGetDeviceProperties(gpuDeviceProp_t *prop, int device) {
+  cudaError_t err = cudaGetDeviceProperties(prop, device);
+  if (err == cudaSuccess)
+    err = cudaDeviceGetAttribute(&prop->clockRate, cudaDevAttrClockRate, device);
+  if (err == cudaSuccess)
+    err = cudaDeviceGetAttribute(&prop->memoryClockRate, cudaDevAttrMemoryClockRate,
+                                 device);
+  return err;
+}
+
 #define gpuDeviceGetSharedMemConfig cudaDeviceGetSharedMemConfig
-#define gpuDeviceProp_t cudaDeviceProp
 #define gpuDeviceReset cudaDeviceReset
 #define gpuDeviceSetSharedMemConfig cudaDeviceSetSharedMemConfig
 #define gpuDeviceSynchronize cudaDeviceSynchronize
@@ -86,7 +103,6 @@ SOFTWARE.
 #define gpuFuncSetSharedMemConfig cudaFuncSetSharedMemConfig
 #define gpuGetDevice cudaGetDevice
 #define gpuGetDeviceCount cudaGetDeviceCount
-#define gpuGetDeviceProperties cudaGetDeviceProperties
 #define gpuGetErrorString cudaGetErrorString
 #define gpuGetLastError cudaGetLastError
 #define gpuMalloc cudaMalloc
