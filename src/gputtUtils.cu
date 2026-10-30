@@ -25,7 +25,11 @@ SOFTWARE.
 
 #include <stdio.h>
 #ifdef ENABLE_NVTOOLS
+#ifdef __HIPCC__
 #include <nvToolsExtHip.h>
+#else
+#include <nvToolsExt.h>
+#endif
 #endif
 #include "gputtUtils.h"
 

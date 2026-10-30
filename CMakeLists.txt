@@ -1,174 +1,130 @@
-cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.28 FATAL_ERROR)
 project(gputt LANGUAGES CXX VERSION 0.1)
 
-if ("x${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "x" AND "x${CMAKE_HIP_ARCHITECTURES}" STREQUAL "x")
-message(FATAL_ERROR "Please define the target GPU architectures explicitly with CMAKE_CUDA_ARCHITECTURES or CMAKE_HIP_ARCHITECTURES")
+include(GNUInstallDirs)
+
+set(_gputt_backend "${GPUTT_BACKEND}")
+if(NOT GPUTT_BACKEND)
+  if(CMAKE_CUDA_ARCHITECTURES AND CMAKE_HIP_ARCHITECTURES)
+    message(FATAL_ERROR "Both GPU architecture families are set; select GPUTT_BACKEND=CUDA or HIP")
+  elseif(CMAKE_HIP_ARCHITECTURES)
+    set(_gputt_backend HIP)
+  elseif(CMAKE_CUDA_ARCHITECTURES)
+    set(_gputt_backend CUDA)
+  endif()
+endif()
+set(GPUTT_BACKEND "${_gputt_backend}" CACHE STRING "GPU backend: CUDA or HIP" FORCE)
+set_property(CACHE GPUTT_BACKEND PROPERTY STRINGS CUDA HIP)
+if(NOT GPUTT_BACKEND MATCHES "^(CUDA|HIP)$")
+  message(FATAL_ERROR "Set GPUTT_BACKEND=CUDA or HIP and the corresponding CMAKE_<BACKEND>_ARCHITECTURES")
+endif()
+if(NOT CMAKE_${GPUTT_BACKEND}_ARCHITECTURES)
+  message(FATAL_ERROR "Please define CMAKE_${GPUTT_BACKEND}_ARCHITECTURES explicitly")
 endif()
 
-if ("x" STREQUAL "x${CMAKE_BUILD_TYPE}")
-set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_HIP_STANDARD 17)
+set(CMAKE_HIP_STANDARD_REQUIRED ON)
 
-if (UNIX)
-# Use $ORIGIN or @loader_path, which allow to pick up
-# dependencies relative to the executable folder
-if (APPLE)
-set(CMAKE_INSTALL_RPATH "@loader_path")
+if(GPUTT_BACKEND STREQUAL "HIP")
+  if(CMAKE_HIP_PLATFORM AND NOT CMAKE_HIP_PLATFORM STREQUAL "amd")
+    message(FATAL_ERROR "Use GPUTT_BACKEND=CUDA for NVIDIA GPUs")
+  endif()
+  set(CMAKE_HIP_PLATFORM amd)
+  enable_language(HIP)
+  find_package(hip REQUIRED CONFIG)
+  set(_gputt_runtime hip::host)
 else()
-set(CMAKE_INSTALL_RPATH "$ORIGIN")
-endif()
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(_gputt_runtime CUDA::cudart)
 endif()
 
-option(GPUTT_BUILD_PYTHON "Build Python bindings" ON)
+if(UNIX)
+  if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+  else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+  endif()
+endif()
+
+option(GPUTT_BUILD_PYTHON "Build Python bindings" ${PROJECT_IS_TOP_LEVEL})
+option(GPUTT_BUILD_TESTS "Build correctness tests" ${PROJECT_IS_TOP_LEVEL})
+option(GPUTT_BUILD_BENCHMARKS "Build benchmarks" ${PROJECT_IS_TOP_LEVEL})
+option(GPUTT_BUILD_EXAMPLES "Build example executable" ${PROJECT_IS_TOP_LEVEL})
 option(ENABLE_NVTOOLS "Enable nvvp profiling of CPU code" OFF)
 
-if (GPUTT_BUILD_PYTHON)
-if ("x${Python3_VERSION}" STREQUAL "x")
-find_package(Python3 COMPONENTS Interpreter Development)
-else()
-find_package(Python3 ${Python3_VERSION} EXACT COMPONENTS Interpreter Development)
-endif()
-set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
-message(STATUS "PYTHON_EXECUTABLE = ${PYTHON_EXECUTABLE}")
+file(GLOB gputt_SOURCE_FILES "src/*.cu")
+set_source_files_properties(${gputt_SOURCE_FILES} PROPERTIES LANGUAGE ${GPUTT_BACKEND})
+add_library(gputt STATIC ${gputt_SOURCE_FILES})
+add_library(gputt::gputt ALIAS gputt)
+target_compile_features(gputt PUBLIC cxx_std_17)
+set_property(TARGET gputt PROPERTY POSITION_INDEPENDENT_CODE TRUE)
+target_include_directories(gputt PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/gputt>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/gputt>)
+target_link_libraries(gputt PUBLIC ${_gputt_runtime})
 
-set(PYBIND11_PYTHON_VERSION ${Python3_VERSION})
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/pybind11)
-endif()
-
-file(GLOB ${PROJECT_NAME}_SOURCE_FILES "src/*.cu")
-file(GLOB ${PROJECT_NAME}_bench_SOURCE_FILES "src/bench/bench.cu")
-file(GLOB ${PROJECT_NAME}_test_SOURCE_FILES "src/test/test.cu")
-file(GLOB ${PROJECT_NAME}_example_SOURCE_FILES "src/example/example.cu")
-
-include(CheckLanguage)
-if (CMAKE_VERSION GREATER_EQUAL 3.24)
-check_language(HIP)
-else()
-message(WARNING "Prior to 3.24, the HIP language is not fully integrated into CMake, "
-	"we have to use more ugly ways...")
-set(HIP_COMPAT_ENABLED 1)
-endif()
-
-if(CMAKE_HIP_COMPILER OR HIP_COMPAT_ENABLED)
-
-if (NOT HIP_COMPAT_ENABLED)
-enable_language(HIP)
-endif()
-
-if(NOT DEFINED HIP_PATH)
-    if(NOT DEFINED ENV{HIP_PATH})
-        set(HIP_PATH "/opt/rocm/hip" CACHE PATH "Path to which HIP has been installed")
-    else()
-        set(HIP_PATH $ENV{HIP_PATH} CACHE PATH "Path to which HIP has been installed")
-    endif()
-endif()
-set(CMAKE_MODULE_PATH "${HIP_PATH}/cmake" ${CMAKE_MODULE_PATH})
-find_package(hip)
-
-if (CMAKE_HIP_COMPILER OR HIP_FOUND)
-set(CMAKE_HIP_FLAGS_DEBUG "-ggdb -fstandalone-debug -Xclang -O0 -Xclang -gcodeview" ${CMAKE_HIP_FLAGS})
-
-if (HIP_COMPAT_ENABLED)
-set(HIP_LANGUAGE CXX)
-set_source_files_properties(${${PROJECT_NAME}_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-x hip")
-set_source_files_properties(${${PROJECT_NAME}_bench_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-x hip")
-set_source_files_properties(${${PROJECT_NAME}_test_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-x hip")
-set_source_files_properties(${${PROJECT_NAME}_example_SOURCE_FILES} PROPERTIES COMPILE_FLAGS "-x hip")
-else()
-set(HIP_LANGUAGE HIP)
-endif()
-set_source_files_properties(${${PROJECT_NAME}_SOURCE_FILES} PROPERTIES LANGUAGE ${HIP_LANGUAGE})
-set_source_files_properties(${${PROJECT_NAME}_bench_SOURCE_FILES} PROPERTIES LANGUAGE ${HIP_LANGUAGE})
-set_source_files_properties(${${PROJECT_NAME}_test_SOURCE_FILES} PROPERTIES LANGUAGE ${HIP_LANGUAGE})
-set_source_files_properties(${${PROJECT_NAME}_example_SOURCE_FILES} PROPERTIES LANGUAGE ${HIP_LANGUAGE})
-endif()
-endif()
-
-check_language(CUDA)
-
-if(NOT (HIP_FOUND OR CMAKE_HIP_COMPILER))
-
-if(CMAKE_CUDA_COMPILER)
-
-enable_language(CUDA)
-
-set(CMAKE_CUDA_FLAGS_DEBUG "-g -G -O0" ${CMAKE_CUDA_FLAGS})
-
-else()
-
-message(FATAL_ERROR "CUDA or HIP backend must be available, aborting")
-
-endif()
-endif()
-
-# ENABLE_NVTOOLS
 if(ENABLE_NVTOOLS)
-    add_definitions(-DENABLE_NVTOOLS)
-    list(APPEND CUDA_NVCC_FLAGS -lnvToolsExt)
-    link_libraries(-lnvToolsExt)
+  if(NOT GPUTT_BACKEND STREQUAL "CUDA" OR NOT TARGET CUDA::nvToolsExt)
+    message(FATAL_ERROR "ENABLE_NVTOOLS requires a CUDA toolkit providing nvToolsExt (CUDA 12 or earlier)")
+  endif()
+  target_compile_definitions(gputt PRIVATE ENABLE_NVTOOLS)
+  target_link_libraries(gputt PRIVATE CUDA::nvToolsExt)
 endif()
 
-add_library(${PROJECT_NAME} STATIC ${${PROJECT_NAME}_SOURCE_FILES})
-target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
-set_property(TARGET ${PROJECT_NAME} PROPERTY POSITION_INDEPENDENT_CODE TRUE)
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-target_include_directories(${PROJECT_NAME} PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/gputt>  
-    $<INSTALL_INTERFACE:include/gputt>)
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-if(hip_FOUND)
-target_link_libraries(${PROJECT_NAME} hip::amdhip64)
+foreach(_kind IN ITEMS test bench example)
+  if((_kind STREQUAL "test" AND GPUTT_BUILD_TESTS) OR
+     (_kind STREQUAL "bench" AND GPUTT_BUILD_BENCHMARKS) OR
+     (_kind STREQUAL "example" AND GPUTT_BUILD_EXAMPLES))
+    set(_source "${CMAKE_CURRENT_SOURCE_DIR}/src/${_kind}/${_kind}.cu")
+    set_source_files_properties(${_source} PROPERTIES LANGUAGE ${GPUTT_BACKEND})
+    add_executable(gputt_${_kind} ${_source})
+    target_link_libraries(gputt_${_kind} PRIVATE gputt::gputt)
+  endif()
+endforeach()
+if(GPUTT_BUILD_TESTS)
+  enable_testing()
+  add_test(NAME gputt_test COMMAND gputt_test)
 endif()
 
-add_executable(${PROJECT_NAME}_bench ${${PROJECT_NAME}_bench_SOURCE_FILES})
-target_compile_features(${PROJECT_NAME}_bench PUBLIC cxx_std_17)
-target_include_directories(${PROJECT_NAME}_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(${PROJECT_NAME}_bench PUBLIC ${PROJECT_NAME})
-
-add_executable(${PROJECT_NAME}_test ${${PROJECT_NAME}_test_SOURCE_FILES})
-target_compile_features(${PROJECT_NAME}_test PUBLIC cxx_std_17)
-target_include_directories(${PROJECT_NAME}_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(${PROJECT_NAME}_test PUBLIC ${PROJECT_NAME})
-
-add_executable(${PROJECT_NAME}_example ${${PROJECT_NAME}_example_SOURCE_FILES})
-target_compile_features(${PROJECT_NAME}_example PUBLIC cxx_std_17)
-target_include_directories(${PROJECT_NAME}_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(${PROJECT_NAME}_example PUBLIC ${PROJECT_NAME})
-
-if (GPUTT_BUILD_PYTHON)
-pybind11_add_module(${PROJECT_NAME}_python "src/python/${PROJECT_NAME}.cu" "src/python/${PROJECT_NAME}_module.cu")
-target_include_directories(${PROJECT_NAME}_python PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_include_directories(${PROJECT_NAME}_python PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-target_compile_definitions(${PROJECT_NAME}_python PRIVATE ${PROJECT_NAME}_EXPORTS)
-target_link_libraries(${PROJECT_NAME}_python PRIVATE ${PROJECT_NAME})
-set_target_properties(${PROJECT_NAME}_python PROPERTIES LIBRARY_OUTPUT_NAME "${PROJECT_NAME}")
+if(GPUTT_BUILD_PYTHON)
+  if("${Python3_VERSION}" STREQUAL "")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+  else()
+    find_package(Python3 ${Python3_VERSION} EXACT REQUIRED COMPONENTS Interpreter Development)
+  endif()
+  set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+  set(PYBIND11_PYTHON_VERSION ${Python3_VERSION})
+  add_subdirectory(ThirdParty/pybind11)
+  set(_python_sources src/python/gputt.cu src/python/gputt_module.cu)
+  set_source_files_properties(${_python_sources} PROPERTIES LANGUAGE ${GPUTT_BACKEND})
+  pybind11_add_module(gputt_python ${_python_sources})
+  target_compile_definitions(gputt_python PRIVATE gputt_EXPORTS)
+  target_link_libraries(gputt_python PRIVATE gputt::gputt)
+  set_target_properties(gputt_python PROPERTIES LIBRARY_OUTPUT_NAME gputt)
+  install(TARGETS gputt_python LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
 
-set(GPUTT_TARGETS ${PROJECT_NAME})
-if (GPUTT_BUILD_PYTHON)
-list(APPEND GPUTT_TARGETS ${PROJECT_NAME}_python)
-endif()
-install(TARGETS ${GPUTT_TARGETS} EXPORT gputt-targets ARCHIVE DESTINATION . LIBRARY DESTINATION .)
-install(FILES include/gputt/gputt.h include/gputt/gputt_runtime.h DESTINATION include/gputt)
-
-install(EXPORT gputt-targets DESTINATION lib/cmake/gputt)
+install(TARGETS gputt EXPORT gputt-targets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES include/gputt/gputt.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gputt)
+install(EXPORT gputt-targets NAMESPACE gputt:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/gputt)
 
 include(CMakePackageConfigHelpers)
-
-include(CMakePackageConfigHelpers)
-# generate the config file that includes the exports
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/gputtConfig.cmake"
-  INSTALL_DESTINATION "lib/cmake/gputt"
-  NO_SET_AND_CHECK_MACRO
-  NO_CHECK_REQUIRED_COMPONENTS_MACRO)
-
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/gputt")
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/gputtConfigVersion.cmake"
-  VERSION "${${PROJECT_NAME}_VERSION_MAJOR}.${${PROJECT_NAME}_VERSION_MINOR}"
-  COMPATIBILITY AnyNewerVersion)
-
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion)
 install(FILES
   ${CMAKE_CURRENT_BINARY_DIR}/gputtConfig.cmake
   ${CMAKE_CURRENT_BINARY_DIR}/gputtConfigVersion.cmake
-  DESTINATION lib/cmake/gputt)
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/gputt)

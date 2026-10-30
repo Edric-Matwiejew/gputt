@@ -1,4 +1,14 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+set(gputt_BACKEND "@GPUTT_BACKEND@")
+set(gputt_VERSION "@PROJECT_VERSION@")
+if(gputt_BACKEND STREQUAL "CUDA")
+  find_dependency(CUDAToolkit REQUIRED)
+else()
+  find_dependency(hip REQUIRED CONFIG)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/gputt-targets.cmake")
+check_required_components(gputt)
 

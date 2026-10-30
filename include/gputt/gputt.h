@@ -35,6 +35,7 @@ SOFTWARE.
 #define GPUTT_API
 #endif // _WIN32
 
+#include <cstddef>
 #include <stdint.h>
 
 // Handle type that is used to store and access gputt plans
