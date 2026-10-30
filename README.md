@@ -8,43 +8,36 @@ This code implements the following tensor transposing methods: `Trivial`, `Tiled
 
 Prerequisites:
 
- * CMake, 3.16+
- * C++ compiler with C++17 compitability
- * HIP or CUDA compiler
- * NVIDIA or AMD GPU (sm30 or above)
+ * CMake, 3.28+
+ * C++ compiler with C++17 compatibility
+ * CUDA toolkit for NVIDIA, or HIP/ROCm for AMD
+ * GPU architecture supported by the selected toolkit
 
-To compile gpuTT library as well as test cases and benchmarks, simply do:
+To compile the library, tests, benchmarks, and example for a GH200/Hopper GPU:
 
-```
-mkdir build
-cd build
-cmake -DCMAKE_CUDA_ARCHITECTURES=61 ..
-make -j12
-```
-
-Note the supported GPU architectures must be specified with `CMAKE_CUDA_ARCHITECTURES` or `CMAKE_HIP_ARCHITECTURES`, otherwise the default architecture setting may result into compile errors due to the missing `__half` type support.
-
-In order to compile with CMake < 3.24, C++ compiler must be specified explicitly:
-
-```
-cmake -DCMAKE_CXX_COMPILER=hipcc ..
+```sh
+cmake -S . -B build -DGPUTT_BACKEND=CUDA -DCMAKE_CUDA_ARCHITECTURES=90 \
+  -DGPUTT_BUILD_PYTHON=OFF
+cmake --build build --parallel
+cmake --install build --prefix /path/to/install
 ```
 
-This will create the library itself:
+For an AMD MI250X, configure with `-DGPUTT_BACKEND=HIP -DCMAKE_HIP_ARCHITECTURES=gfx90a` instead. CUDA uses native NVCC; HIP uses the AMD compiler. The target architectures must be set explicitly. If `GPUTT_BACKEND` is omitted, it is inferred from the architecture variable; set the backend explicitly when both architecture variables are present.
 
- * `include/gputt.h`
- * `libgputt.a`
+`GPUTT_BUILD_TESTS`, `GPUTT_BUILD_BENCHMARKS`, `GPUTT_BUILD_EXAMPLES`, and `GPUTT_BUILD_PYTHON` default to `ON` for a standalone build and `OFF` when used as a subproject. Python bindings require the pybind11 submodule (`git submodule update --init --recursive`) and Python development files. `ENABLE_NVTOOLS` requires a CUDA toolkit providing the legacy nvToolsExt library (CUDA 12 or earlier).
 
-as well as the test and benchmarks
+Both an installed package and `add_subdirectory` provide the `gputt::gputt` target, including the selected GPU runtime dependency. Link it to your application:
 
- * `gputt_test`
- * `gputt_bench`
+```cmake
+find_package(gputt CONFIG REQUIRED)
+target_link_libraries(my_application PRIVATE gputt::gputt)
+```
 
-In order to use gpuTT, you only need the include `include/gputt.h` and the library `lib/libgputt.a` files.
+For a source build, replace `find_package` with `add_subdirectory(path/to/gputt)`, setting the backend and architecture first. The installed public header is `include/gputt/gputt.h`, usable as either `<gputt.h>` or `<gputt/gputt.h>` through the CMake target, and the static library is installed under the configured library directory (`lib` or `lib64`). The package records its backend as `gputt_BACKEND`.
 
 ## Running tests and benchmarks
 
-Tests and benchmark executables are in the bin/ directory and they can be run without any options.
+Tests and benchmark executables are in the build directory and they can be run without any options. Run the correctness suite with `ctest --test-dir build --output-on-failure`.
 Options to the test executable lets you choose the device ID on which to run:
 
 ```
@@ -115,10 +108,10 @@ int main() {
 
   // Option 1: Create plan on NULL stream and choose implementation based on heuristics
   gputtHandle plan;
-  gputtCheck(gputtPlan(&plan, 4, dim, permutation, sizeof(double), 0));
+  gputtCheck(gputtPlan(&plan, 4, dim, permutation, gputtDataTypeFloat64, nullptr));
 
   // Option 2: Create plan on NULL stream and choose implementation based on performance measurements
-  // gputtCheck(gputtPlanMeasure(&plan, 4, dim, permutation, sizeof(double), 0, idata, odata));
+  // gputtCheck(gputtPlanMeasure(&plan, 4, dim, permutation, gputtDataTypeFloat64, nullptr, idata, odata));
 
   // Execute plan
   gputtCheck(gputtExecute(plan, idata, odata));
@@ -148,14 +141,16 @@ for high-rank tensors.
 // rank              = Rank of the tensor
 // dim[rank]         = Dimensions of the tensor
 // permutation[rank] = Transpose permutation
-// sizeofType        = Size of the elements of the tensor in bytes (=4 or 8)
-// stream            = CUDA stream (0 if no stream is used)
+// dtype             = Element type, e.g. gputtDataTypeFloat64
+// stream            = CUDA or HIP stream cast to gputtStream (nullptr for the default stream)
+// method            = Transpose method (heuristic selection by default)
 //
 // Returns
 // Success/unsuccess code
 // 
-gputtResult gputtPlan(gputtHandle* handle, int rank, int* dim, int* permutation, size_t sizeofType,
-  cudaStream_t stream);
+gputtResult gputtPlan(gputtHandle* handle, int rank, const int* dim, const int* permutation,
+  gputtDataType dtype, gputtStream stream,
+  gputtTransposeMethod method = gputtTransposeMethodUnknown);
 
 //
 // Create plan and choose implementation by measuring performance
@@ -165,16 +160,17 @@ gputtResult gputtPlan(gputtHandle* handle, int rank, int* dim, int* permutation,
 // rank              = Rank of the tensor
 // dim[rank]         = Dimensions of the tensor
 // permutation[rank] = Transpose permutation
-// sizeofType        = Size of the elements of the tensor in bytes (=4 or 8)
-// stream            = CUDA stream (0 if no stream is used)
+// dtype             = Element type, e.g. gputtDataTypeFloat64
+// stream            = CUDA or HIP stream cast to gputtStream (nullptr for the default stream)
 // idata             = Input data size product(dim)
 // odata             = Output data size product(dim)
 //
 // Returns
 // Success/unsuccess code
 // 
-gputtResult gputtPlanMeasure(gputtHandle* handle, int rank, int* dim, int* permutation, size_t sizeofType,
-  cudaStream_t stream, void* idata, void* odata);
+gputtResult gputtPlanMeasure(gputtHandle* handle, int rank, const int* dim, const int* permutation,
+  gputtDataType dtype, gputtStream stream, const void* idata, void* odata,
+  const void* alpha = nullptr, const void* beta = nullptr);
   
 //
 // Destroy plan
@@ -200,7 +196,8 @@ gputtResult gputtDestroy(gputtHandle handle);
 // Returns
 // Success/unsuccess code
 //
-gputtResult gputtExecute(gputtHandle handle, void* idata, void* odata);
+gputtResult gputtExecute(gputtHandle handle, const void* idata, void* odata,
+  const void* alpha = nullptr, const void* beta = nullptr);
 ```
 
 ## Known Bugs
@@ -214,11 +211,7 @@ gputtResult gputtExecute(gputtHandle handle, void* idata, void* odata);
 
 ## Troubleshooting
 
-1. HIP compiler might appear not found as shown below, even if it definitely exists in the system. The reason is not a PATH setting. The `check_language(HIP)` command actually finds the compiler, but runs into an issue when testing it, for example [this issue](https://github.com/RadeonOpenCompute/ROCm/issues/1843). The solution is to temporary specify the HIP compiler explicitly and handle an error, which will be displayed upon CMake testing it: `cmake -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ ..`.
-
-```
--- Looking for a HIP compiler - NOTFOUND
-```
+1. If CMake cannot find a HIP compiler, specify it explicitly with `-DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++` and inspect the compiler test error. A compiler installation can be found but still fail its initial test, for example [this issue](https://github.com/RadeonOpenCompute/ROCm/issues/1843).
 
 2. The following error could be fixed by `sudo apt-get install libstdc++-12-dev`, as suggested in this issue:
 
