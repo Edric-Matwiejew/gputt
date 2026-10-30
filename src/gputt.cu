@@ -39,7 +39,7 @@ static std::unordered_map<gputtHandle, gputtPlan_t *> planStorage;
 static std::mutex planStorageMutex;
 
 // Current handle
-static std::atomic<unsigned int> curHandle(0);
+static std::atomic<unsigned int> curHandle(1); // Reserve null for an invalid handle.
 
 // Table of devices that have been initialized
 static std::unordered_map<int, gpuDeviceProp_t> deviceProps;

@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
   delete timerDouble;
 
   gpuCheck(gpuDeviceReset());
-  return 0;
+  return passed ? 0 : 1;
 }
 
 //
@@ -522,8 +522,13 @@ bool test_tensor(std::vector<int> &dim, std::vector<int> &permutation) {
     // Only use the methods that are supported for the given parameters.
     gputtHandle plan;
     if (GPUTT_SUCCESS ==
-        gputtPlan(&plan, rank, dim.data(), permutation.data(), gputtGetDataType<T>(), 0, method))
+        gputtPlan(&plan, rank, dim.data(), permutation.data(), gputtGetDataType<T>(), 0, method)) {
+      if (!plan) {
+        printf("#ERROR(test_tensor): Successful plan has a null handle\n");
+        return false;
+      }
       plans.push_back(plan);
+    }
   }
 
   for (auto plan : plans) {
