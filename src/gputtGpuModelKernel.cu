@@ -255,11 +255,12 @@ writeMemStat(const int warpLane, MemStat memStat, MemStat *RESTRICT glMemStat) {
 //
 // Transpose when Mm and Mk don't overlap and contain only single rank
 //
-//  dim3 numthread(TILEDIM, TILEROWS, 1);
-//  dim3 numblock( ((plan.volMm-1)/TILEDIM+1)*((plan.volMk-1)/TILEDIM+1), 1,
+//  dim3 numthread(TileDim, TILEROWS, 1);
+//  dim3 numblock( ((plan.volMm-1)/TileDim+1)*((plan.volMk-1)/TileDim+1), 1,
 //  plan.volMbar);
 //
-__global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
+template <int TileDim>
+__global__ void __launch_bounds__(TileDim *TILEROWS, 1)
     countTiled(const int numMm, const int volMbar, const int sizeMbar,
                const int2 tiledVol, const int cuDimMk, const int cuDimMm,
                const TensorConvInOut *RESTRICT glMbar, const int accWidth,
@@ -275,8 +276,8 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
     Mbar = glMbar[warpLane];
   }
 
-  const int bx = (blockIdx.x % numMm) * TILEDIM;
-  const int by = (blockIdx.x / numMm) * TILEDIM;
+  const int bx = (blockIdx.x % numMm) * TileDim;
+  const int by = (blockIdx.x / numMm) * TileDim;
 
   const int xin = bx + threadIdx.x;
   const int yin = by + threadIdx.y;
@@ -314,7 +315,7 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
 
     // Read data into shared memory tile
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       int n = __popc(__ballot_sync(
           0xffffffff, maskIny & (static_cast<decltype(maskIny)>(1) << j)));
       memStat.gld_tran += countGlTransactions(posIn, n, accWidth, warpLane);
@@ -323,7 +324,7 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
     }
 
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       int n = __popc(__ballot_sync(
           0xffffffff, maskOutx & (static_cast<decltype(maskOutx)>(1) << j)));
       memStat.gst_tran += countGlTransactions(posOut, n, accWidth, warpLane);
@@ -595,11 +596,12 @@ __global__ void __launch_bounds__(1024, 1)
 //
 // Transpose when the lead dimension is the same, e.g. (1, 2, 3) -> (1, 3, 2)
 //
-//  dim3 numthread(TILEDIM, TILEROWS, 1);
-//  dim3 numblock( ((plan.volMm-1)/TILEDIM+1)*((plan.volMkBar-1)/TILEDIM+1), 1,
+//  dim3 numthread(TileDim, TILEROWS, 1);
+//  dim3 numblock( ((plan.volMm-1)/TileDim+1)*((plan.volMkBar-1)/TileDim+1), 1,
 //  plan.volMbar);
 //
-__global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
+template <int TileDim>
+__global__ void __launch_bounds__(TileDim *TILEROWS, 1)
     countTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
                    const int cuDimMk, const int cuDimMm, const int2 tiledVol,
                    const TensorConvInOut *RESTRICT gl_Mbar, const int accWidth,
@@ -615,8 +617,8 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
     Mbar = gl_Mbar[warpLane];
   }
 
-  const int bx = (blockIdx.x % numMm) * TILEDIM;
-  const int by = (blockIdx.x / numMm) * TILEDIM;
+  const int bx = (blockIdx.x % numMm) * TileDim;
+  const int by = (blockIdx.x / numMm) * TileDim;
 
   const int x = bx + threadIdx.x;
   const int y = by + threadIdx.y;
@@ -632,7 +634,7 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
       pos0 += x + y * cuDimMk;
 
 #pragma unroll
-      for (int j = 0; j < TILEDIM; j += TILEROWS) {
+      for (int j = 0; j < TileDim; j += TILEROWS) {
         int pos = pos0 + j * cuDimMk;
         int n = __popc(__ballot_sync(0xffffffff,
                                      (x < tiledVol.x) && (y + j < tiledVol.y)));
@@ -648,7 +650,7 @@ __global__ void __launch_bounds__(TILEDIM *TILEROWS, 1)
       pos0 += x + y * cuDimMm;
 
 #pragma unroll
-      for (int j = 0; j < TILEDIM; j += TILEROWS) {
+      for (int j = 0; j < TileDim; j += TILEROWS) {
         int pos = pos0 + j * cuDimMm;
         int n = __popc(__ballot_sync(0xffffffff,
                                      (x < tiledVol.x) && (y + j < tiledVol.y)));
@@ -716,6 +718,7 @@ bool gputtGpuModelKernel(gputtPlan_t &plan, const int accWidth,
   gpuCheck(gpuMalloc(&devMemStat, sizeof(MemStat)));
   set_device_array<MemStat>(devMemStat, 0, 1, plan.stream);
 
+  bool launched = true;
   switch (ts.method) {
   case gputtTransposeMethodTrivial: {
     return false;
@@ -775,18 +778,29 @@ bool gputtGpuModelKernel(gputtPlan_t &plan, const int accWidth,
   } break;
 
   case gputtTransposeMethodTiled: {
-    countTiled<<<lc.numblock, lc.numthread, 0, plan.stream>>>(
-        ((ts.volMm - 1) / TILEDIM + 1), ts.volMbar, ts.sizeMbar, plan.tiledVol,
-        plan.cuDimMk, plan.cuDimMm, plan.Mbar, accWidth, cacheWidth,
-        devMemStat);
+    launched = gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+      constexpr int TileDim = decltype(tile)::value;
+      countTiled<TileDim><<<lc.numblock, lc.numthread, 0, plan.stream>>>(
+          ((ts.volMm - 1) / lc.numthread.x + 1), ts.volMbar, ts.sizeMbar,
+          plan.tiledVol, plan.cuDimMk, plan.cuDimMm, plan.Mbar, accWidth,
+          cacheWidth, devMemStat);
+    });
   } break;
 
   case gputtTransposeMethodTiledCopy: {
-    countTiledCopy<<<lc.numblock, lc.numthread, 0, plan.stream>>>(
-        ((ts.volMm - 1) / TILEDIM + 1), ts.volMbar, ts.sizeMbar, plan.cuDimMk,
-        plan.cuDimMm, plan.tiledVol, plan.Mbar, accWidth, cacheWidth,
-        devMemStat);
+    launched = gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+      constexpr int TileDim = decltype(tile)::value;
+      countTiledCopy<TileDim><<<lc.numblock, lc.numthread, 0, plan.stream>>>(
+          ((ts.volMm - 1) / lc.numthread.x + 1), ts.volMbar, ts.sizeMbar,
+          plan.cuDimMk, plan.cuDimMm, plan.tiledVol, plan.Mbar, accWidth,
+          cacheWidth, devMemStat);
+    });
   } break;
+  }
+
+  if (!launched) {
+    gpuCheck(gpuFree(devMemStat));
+    return false;
   }
 
   gpuCheck(gpuGetLastError());

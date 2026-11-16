@@ -50,11 +50,11 @@ static int32_t ilog2(uint32_t x)
 //
 // Transpose when Mm and Mk don't overlap and contain only single rank
 //
-//  dim3 numthread(TILEDIM, TILEROWS, 1);
-//  dim3 numblock( ((plan.volMm-1)/TILEDIM+1)*((plan.volMk-1)/TILEDIM+1), 1,
+//  dim3 numthread(TileDim, TILEROWS, 1);
+//  dim3 numblock( ((plan.volMm-1)/TileDim+1)*((plan.volMk-1)/TileDim+1), 1,
 //  plan.volMbar);
 //
-template <typename T, bool betaIsZero>
+template <typename T, int TileDim, bool betaIsZero>
 __global__ void
 transposeTiled(const int numMm, const int volMbar, const int sizeMbar,
                const int2 tiledVol, const int cuDimMk, const int cuDimMm,
@@ -62,7 +62,7 @@ transposeTiled(const int numMm, const int volMbar, const int sizeMbar,
                T *RESTRICT dataOut, const T alpha, const T beta) {
 
   // Shared memory
-  __shared__ T shTile[TILEDIM][TILEDIM + 1];
+  __shared__ T shTile[TileDim][TileDim + 1];
 
   const int warpLane = threadIdx.x & (warpSize - 1);
   TensorConvInOut Mbar;
@@ -74,8 +74,8 @@ transposeTiled(const int numMm, const int volMbar, const int sizeMbar,
     Mbar = glMbar[warpLane];
   }
 
-  const int bx = (blockIdx.x % numMm) * TILEDIM;
-  const int by = (blockIdx.x / numMm) * TILEDIM;
+  const int bx = (blockIdx.x % numMm) * TileDim;
+  const int by = (blockIdx.x / numMm) * TileDim;
 
   const int xin = bx + threadIdx.x;
   const int yin = by + threadIdx.y;
@@ -113,7 +113,7 @@ transposeTiled(const int numMm, const int volMbar, const int sizeMbar,
 
     // Read data into shared memory tile
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       // int pos = posIn + j*cuDimMk;
       // if (xin < readVol.x && yin + j < readVol.y) {
       if ((maskIny & (static_cast<decltype(maskIny)>(1) << j)) != 0) {
@@ -126,7 +126,7 @@ transposeTiled(const int numMm, const int volMbar, const int sizeMbar,
     __syncthreads();
 
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       // int pos = posOut + j*cuDimMm;
       // if (xout + j < readVol.x && yout < readVol.y) {
       if ((maskOutx & (static_cast<decltype(maskOutx)>(1) << j)) != 0) {
@@ -393,11 +393,11 @@ transposePackedSplit(const int splitDim, const int volMmkUnsplit,
 //
 // Transpose when the lead dimension is the same, e.g. (1, 2, 3) -> (1, 3, 2)
 //
-//  dim3 numthread(TILEDIM, TILEROWS, 1);
-//  dim3 numblock( ((plan.volMm-1)/TILEDIM+1)*((plan.volMkBar-1)/TILEDIM+1), 1,
+//  dim3 numthread(TileDim, TILEROWS, 1);
+//  dim3 numblock( ((plan.volMm-1)/TileDim+1)*((plan.volMkBar-1)/TileDim+1), 1,
 //  plan.volMbar);
 //
-template <typename T, bool betaIsZero>
+template <typename T, int TileDim, bool betaIsZero>
 __global__ void
 transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
                    const int cuDimMk, const int cuDimMm, const int2 tiledVol,
@@ -415,8 +415,8 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
     Mbar = gl_Mbar[warpLane];
   }
 
-  const int bx = (blockIdx.x % numMm) * TILEDIM;
-  const int by = (blockIdx.x / numMm) * TILEDIM;
+  const int bx = (blockIdx.x % numMm) * TileDim;
+  const int by = (blockIdx.x / numMm) * TileDim;
 
   const int x = bx + threadIdx.x;
   const int y = by + threadIdx.y;
@@ -443,11 +443,11 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
     int posOut = posMajorOut + posMinorOut;
 
     // Variables where values are stored
-    T val[TILEDIM / TILEROWS];
+    T val[TileDim / TILEROWS];
 
     // Read global memory
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       // if ((x < tiledVol.x) && (y + j < tiledVol.y)) {
       if ((mask & (static_cast<decltype(mask)>(1) << j)) != 0) {
         val[j / TILEROWS] = dataIn[posIn];
@@ -457,7 +457,7 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
 
     // Write global memory
 #pragma unroll
-    for (int j = 0; j < TILEDIM; j += TILEROWS) {
+    for (int j = 0; j < TileDim; j += TILEROWS) {
       // if ((x < tiledVol.x) && (y + j < tiledVol.y)) {
       if ((mask & (static_cast<decltype(mask)>(1) << j)) != 0) {
         if (betaIsZero)
@@ -490,11 +490,11 @@ __device__ __forceinline__ int tensorPos(const int p, const int rank,
 //
 // Transpose when the lead dimension is the same, e.g. (1, 2, 3) -> (1, 3, 2)
 //
-//  dim3 numthread(TILEDIM, TILEROWS, 1);
-//  dim3 numblock( ((plan.volMm-1)/TILEDIM+1)*((plan.volMkBar-1)/TILEDIM+1), 1,
+//  dim3 numthread(TileDim, TILEROWS, 1);
+//  dim3 numblock( ((plan.volMm-1)/TileDim+1)*((plan.volMkBar-1)/TileDim+1), 1,
 //  plan.volMbar);
 //
-template <typename T>
+template <typename T, int TileDim, bool betaIsZero>
 __global__ void
 transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
                    const int cuDimMk, const int cuDimMm, const int2 tiledVol,
@@ -511,8 +511,8 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
     Mbar = gl_Mbar[warpLane];
   }
 
-  const int bx = (blockIdx.x % numMm) * TILEDIM;
-  const int by = (blockIdx.x / numMm) * TILEDIM;
+  const int bx = (blockIdx.x % numMm) * TileDim;
+  const int by = (blockIdx.x / numMm) * TileDim;
 
   const int x = bx + threadIdx.x;
   const int y = by + threadIdx.y;
@@ -520,7 +520,7 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
   for (int posMbar = blockIdx.z; posMbar < volMbar; posMbar += gridDim.z) {
 
     // Variables where values are stored
-    T val[TILEDIM / TILEROWS];
+    T val[TileDim / TILEROWS];
 
     // Read global memory
     {
@@ -528,7 +528,7 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
       pos0 += x + y * cuDimMk;
 
 #pragma unroll
-      for (int j = 0; j < TILEDIM; j += TILEROWS) {
+      for (int j = 0; j < TileDim; j += TILEROWS) {
         int pos = pos0 + j * cuDimMk;
         if ((x < tiledVol.x) && (y + j < tiledVol.y)) {
           val[j / TILEROWS] = dataIn[pos];
@@ -543,7 +543,7 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
       pos0 += x + y * cuDimMm;
 
 #pragma unroll
-      for (int j = 0; j < TILEDIM; j += TILEROWS) {
+      for (int j = 0; j < TileDim; j += TILEROWS) {
         int pos = pos0 + j * cuDimMm;
         if ((x < tiledVol.x) && (y + j < tiledVol.y)) {
           dataOut[pos] = val[j / TILEROWS];
@@ -562,7 +562,7 @@ transposeTiledCopy(const int numMm, const int volMbar, const int sizeMbar,
 // Sets shared memory bank configuration for all kernels. Needs to be called
 // once per device.
 //
-void gputtKernelSetSharedMemConfig() {
+void gputtKernelSetSharedMemConfig(const int tileDim) {
 #define CALL(NREG)                                                             \
   gpuCheck(gpuFuncSetSharedMemConfig(                                          \
       reinterpret_cast<void *>(&transposePacked<float, NREG, true>),           \
@@ -591,19 +591,22 @@ void gputtKernelSetSharedMemConfig() {
 #include "calls.h"
 #undef CALL
 
-  gpuCheck(gpuFuncSetSharedMemConfig(
-      reinterpret_cast<void *>(&transposeTiled<float, true>),
-      gpuSharedMemBankSizeFourByte));
-  gpuCheck(gpuFuncSetSharedMemConfig(
-      reinterpret_cast<void *>(&transposeTiledCopy<float, true>),
-      gpuSharedMemBankSizeFourByte));
+  gputtDispatchTileDim(tileDim, [&](auto tile) {
+    constexpr int TileDim = decltype(tile)::value;
+    gpuCheck(gpuFuncSetSharedMemConfig(
+        reinterpret_cast<void *>(&transposeTiled<float, TileDim, true>),
+        gpuSharedMemBankSizeFourByte));
+    gpuCheck(gpuFuncSetSharedMemConfig(
+        reinterpret_cast<void *>(&transposeTiledCopy<float, TileDim, true>),
+        gpuSharedMemBankSizeFourByte));
 
-  gpuCheck(gpuFuncSetSharedMemConfig(
-      reinterpret_cast<void *>(&transposeTiled<double, true>),
-      gpuSharedMemBankSizeEightByte));
-  gpuCheck(gpuFuncSetSharedMemConfig(
-      reinterpret_cast<void *>(&transposeTiledCopy<double, true>),
-      gpuSharedMemBankSizeEightByte));
+    gpuCheck(gpuFuncSetSharedMemConfig(
+        reinterpret_cast<void *>(&transposeTiled<double, TileDim, true>),
+        gpuSharedMemBankSizeEightByte));
+    gpuCheck(gpuFuncSetSharedMemConfig(
+        reinterpret_cast<void *>(&transposeTiledCopy<double, TileDim, true>),
+        gpuSharedMemBankSizeEightByte));
+  });
 
   // TODO All other types!
 }
@@ -728,7 +731,7 @@ int getNumActiveBlock(const int method, const gputtDataType dtype,
 
 #define CALL0(TYPE, NREG)                                                 \
   gpuOccupancyMaxActiveBlocksPerMultiprocessor(                           \
-      &numActiveBlock, transposeTiled<TYPE, true>, numthread,             \
+      &numActiveBlock, transposeTiled<TYPE, TileDim, true>, numthread,       \
       lc.shmemsize)
 #define CALL()                                                            \
   switch(dtype)                                                           \
@@ -746,11 +749,14 @@ int getNumActiveBlock(const int method, const gputtDataType dtype,
   case gputtDataTypeUInt8   : CALL0( uint8_t, ICASE); break;              \
   case gputtDataTypeInt8x4  : CALL0( char4_t, ICASE); break;              \
   case gputtDataTypeUInt8x4 : CALL0(uchar4_t, ICASE); break;              \
-  }                                                                       \
-  break
+  }
 
   case gputtTransposeMethodTiled :
-    CALL();
+    if (!gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+          constexpr int TileDim = decltype(tile)::value;
+          CALL();
+        }))
+      return 0;
     break;
 
 #undef CALL
@@ -758,7 +764,7 @@ int getNumActiveBlock(const int method, const gputtDataType dtype,
 
 #define CALL0(TYPE, NREG)                                                 \
   gpuOccupancyMaxActiveBlocksPerMultiprocessor(                           \
-      &numActiveBlock, transposeTiledCopy<TYPE, true>, numthread,         \
+      &numActiveBlock, transposeTiledCopy<TYPE, TileDim, true>, numthread,   \
       lc.shmemsize)
 #define CALL()                                                            \
   switch(dtype)                                                           \
@@ -776,11 +782,14 @@ int getNumActiveBlock(const int method, const gputtDataType dtype,
   case gputtDataTypeUInt8   : CALL0( uint8_t, ICASE); break;              \
   case gputtDataTypeInt8x4  : CALL0( char4_t, ICASE); break;              \
   case gputtDataTypeUInt8x4 : CALL0(uchar4_t, ICASE); break;              \
-  }                                                                       \
-  break
+  }
 
   case gputtTransposeMethodTiledCopy :
-    CALL();
+    if (!gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+          constexpr int TileDim = decltype(tile)::value;
+          CALL();
+        }))
+      return 0;
     break;
   }
 
@@ -827,7 +836,7 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
 
   case gputtTransposeMethodPacked: {
     // Amount of shared memory required
-    lc.shmemsize = ts.shmemAlloc(dtype); // ts.volMmk*sizeofType;
+    lc.shmemsize = ts.shmemAlloc(dtype, prop.warpSize); // ts.volMmk*sizeofType;
 
     // Check that we're not using too much shared memory per block
     if (lc.shmemsize > prop.sharedMemPerBlock) {
@@ -872,7 +881,7 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
       int numActiveBlock =
           getNumActiveBlock(ts.method, dtype, lc, deviceID, prop);
       // int val = numActiveBlock*lc.numthread.x;
-      int val = ts.volMmkUsed() * numActiveBlock;
+      int val = ts.volMmkUsed(prop.warpSize) * numActiveBlock;
       if (val > bestVal) {
         bestVal = val;
         bestNumRegStorage = lc.numRegStorage;
@@ -892,7 +901,7 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
 
   case gputtTransposeMethodPackedSplit: {
     // Amount of shared memory required
-    lc.shmemsize = ts.shmemAlloc(dtype);
+    lc.shmemsize = ts.shmemAlloc(dtype, prop.warpSize);
 
     // Check that we're not using too much shared memory per block
     if (lc.shmemsize > prop.sharedMemPerBlock) {
@@ -942,7 +951,7 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
       int numActiveBlock =
           getNumActiveBlock(ts.method, dtype, lc, deviceID, prop);
       // int val = numActiveBlock*lc.numthread.x*lc.numRegStorage;
-      int val = ts.volMmkUsed() * numActiveBlock;
+      int val = ts.volMmkUsed(prop.warpSize) * numActiveBlock;
       if (val > bestVal) {
         bestVal = val;
         bestNumRegStorage = lc.numRegStorage;
@@ -961,11 +970,11 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
   } break;
 
   case gputtTransposeMethodTiled: {
-    lc.numthread.x = TILEDIM;
+    lc.numthread.x = prop.warpSize;
     lc.numthread.y = TILEROWS;
     lc.numthread.z = 1;
-    lc.numblock.x =
-        ((ts.volMm - 1) / TILEDIM + 1) * ((ts.volMk - 1) / TILEDIM + 1);
+    lc.numblock.x = ((ts.volMm - 1) / prop.warpSize + 1) *
+                    ((ts.volMk - 1) / prop.warpSize + 1);
     lc.numblock.y = 1;
     lc.numblock.z = max(
         1, min((prop.multiProcessorCount * 8) / (lc.numblock.x * lc.numblock.y),
@@ -975,11 +984,11 @@ int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit 
   } break;
 
   case gputtTransposeMethodTiledCopy: {
-    lc.numthread.x = TILEDIM;
+    lc.numthread.x = prop.warpSize;
     lc.numthread.y = TILEROWS;
     lc.numthread.z = 1;
-    lc.numblock.x =
-        ((ts.volMm - 1) / TILEDIM + 1) * ((ts.volMkBar - 1) / TILEDIM + 1);
+    lc.numblock.x = ((ts.volMm - 1) / prop.warpSize + 1) *
+                    ((ts.volMkBar - 1) / prop.warpSize + 1);
     lc.numblock.y = 1;
     lc.numblock.z = ts.volMbar;
     lc.numblock.z =
@@ -1163,9 +1172,9 @@ bool gputtKernel(gputtPlan_t &plan, const void *dataIn, void *dataOut,
 #undef CALL1
 
 #define CALL1(TYPE, betaIsZero) do {                                              \
-  transposeTiled<TYPE, betaIsZero>                                                \
+  transposeTiled<TYPE, TileDim, betaIsZero>                                        \
       <<<lc.numblock, lc.numthread, 0, plan.stream>>>(                            \
-          ((ts.volMm - 1) / TILEDIM + 1), ts.volMbar, ts.sizeMbar,                \
+          ((ts.volMm - 1) / lc.numthread.x + 1), ts.volMbar, ts.sizeMbar,         \
           plan.tiledVol, plan.cuDimMk, plan.cuDimMm, plan.Mbar,                   \
           reinterpret_cast<const TYPE*>(dataIn),                                  \
           reinterpret_cast<TYPE*>(dataOut),                                       \
@@ -1196,11 +1205,14 @@ bool gputtKernel(gputtPlan_t &plan, const void *dataIn, void *dataOut,
     case gputtDataTypeUInt8   : CALL0( uint8_t); break;                        \
     case gputtDataTypeInt8x4  : CALL0( char4_t); break;                        \
     case gputtDataTypeUInt8x4 : CALL0(uchar4_t); break;                        \
-    }                                                                          \
-    break
+    }
 
   case gputtTransposeMethodTiled :
-    CALL();
+    if (!gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+          constexpr int TileDim = decltype(tile)::value;
+          CALL();
+        }))
+      return false;
     break;
 
 #undef CALL
@@ -1208,9 +1220,9 @@ bool gputtKernel(gputtPlan_t &plan, const void *dataIn, void *dataOut,
 #undef CALL1
 
 #define CALL1(TYPE, betaIsZero) do {                                              \
-  transposeTiledCopy<TYPE, betaIsZero>                                            \
+  transposeTiledCopy<TYPE, TileDim, betaIsZero>                                    \
       <<<lc.numblock, lc.numthread, 0, plan.stream>>>(                            \
-          ((ts.volMm - 1) / TILEDIM + 1), ts.volMbar, ts.sizeMbar,                \
+          ((ts.volMm - 1) / lc.numthread.x + 1), ts.volMbar, ts.sizeMbar,         \
           plan.cuDimMk, plan.cuDimMm, plan.tiledVol, plan.Mbar,                   \
           reinterpret_cast<const TYPE*>(dataIn),                                  \
           reinterpret_cast<TYPE*>(dataOut),                                       \
@@ -1241,11 +1253,14 @@ bool gputtKernel(gputtPlan_t &plan, const void *dataIn, void *dataOut,
     case gputtDataTypeUInt8   : CALL0( uint8_t); break;                        \
     case gputtDataTypeInt8x4  : CALL0( char4_t); break;                        \
     case gputtDataTypeUInt8x4 : CALL0(uchar4_t); break;                        \
-    }                                                                          \
-    break
+    }
 
   case gputtTransposeMethodTiledCopy :
-    CALL();
+    if (!gputtDispatchTileDim(lc.numthread.x, [&](auto tile) {
+          constexpr int TileDim = decltype(tile)::value;
+          CALL();
+        }))
+      return false;
     break;
 
 #undef CALL

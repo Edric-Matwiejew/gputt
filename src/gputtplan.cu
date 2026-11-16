@@ -344,7 +344,7 @@ bool operator==(const TensorSplit &lhs, const TensorSplit &rhs) {
 //
 // Number of elements in shared memory space
 //
-size_t TensorSplit::shmem() const {
+size_t TensorSplit::shmem(const int tileDim) const {
 
   size_t vol = 0;
 
@@ -363,7 +363,7 @@ size_t TensorSplit::shmem() const {
   } break;
 
   case gputtTransposeMethodTiled: {
-    vol = TILEDIM * TILEDIM;
+    vol = tileDim * tileDim;
   } break;
 
   case gputtTransposeMethodTiledCopy: {
@@ -377,7 +377,7 @@ size_t TensorSplit::shmem() const {
 //
 // Number of elements in Mmk that are used effectively
 //
-size_t TensorSplit::volMmkUsed() const {
+size_t TensorSplit::volMmkUsed(const int tileDim) const {
   size_t vol = 0;
 
   switch (method) {
@@ -395,11 +395,11 @@ size_t TensorSplit::volMmkUsed() const {
   } break;
 
   case gputtTransposeMethodTiled: {
-    vol = std::min(TILEDIM, volMm) * std::min(TILEDIM, volMk);
+    vol = std::min(tileDim, volMm) * std::min(tileDim, volMk);
   } break;
 
   case gputtTransposeMethodTiledCopy: {
-    vol = std::min(TILEDIM, volMm) * std::min(TILEDIM, volMk);
+    vol = std::min(tileDim, volMm) * std::min(tileDim, volMk);
   } break;
   }
 
@@ -410,7 +410,7 @@ size_t TensorSplit::volMmkUsed() const {
 // Bytes the shared memory space that needs to be allocated
 // (can be larger than shmem() due to padding)
 //
-size_t TensorSplit::shmemAlloc(gputtDataType dtype) const {
+size_t TensorSplit::shmemAlloc(gputtDataType dtype, const int tileDim) const {
   size_t vol = 0;
 
   switch (method) {
@@ -429,7 +429,7 @@ size_t TensorSplit::shmemAlloc(gputtDataType dtype) const {
   } break;
 
   case gputtTransposeMethodTiled: {
-    vol = (TILEDIM + 1) * TILEDIM * sizeofType(dtype);
+    vol = (tileDim + 1) * tileDim * sizeofType(dtype);
   } break;
 
   case gputtTransposeMethodTiledCopy: {
@@ -582,7 +582,7 @@ bool gputtPlan_t::createPackedSplitPlans(const int rank, const int *dim,
       ts.method = gputtTransposeMethodPacked;
       ts.update(numMm, numMk, rank, dim, permutation);
       // Amount of shared memory required
-      size_t shmemsize = ts.shmemAlloc(dtype);
+      size_t shmemsize = ts.shmemAlloc(dtype, prop.warpSize);
       if (shmemsize > prop.sharedMemPerBlock) {
         // Does not fit into shared memory, need to split
         ts.method = gputtTransposeMethodPackedSplit;
@@ -630,7 +630,7 @@ bool gputtPlan_t::createPackedSplitPlans(const int rank, const int *dim,
           numActiveBlock = gputtKernelLaunchConfiguration(dtype, ts,
                                                           deviceID, prop, lc);
           if (numActiveBlock != 0) {
-            int volMmkUsed = ts.volMmkUsed();
+            int volMmkUsed = ts.volMmkUsed(prop.warpSize);
             int val1 = volMmkUsed * numActiveBlock;
             int val2 = (lc.numthread.x * lc.numRegStorage * 100) / volMmkUsed;
             if (bestVal1 < val1) {
@@ -1088,10 +1088,10 @@ bool gputtPlan_t::countCycles(gpuDeviceProp_t &prop,
     gpuRangeStart("countTiledGlTransactions");
 #endif
     countTiledGlTransactions(
-        false, numPosMbarSample, tensorSplit.volMm, tensorSplit.volMk,
-        tensorSplit.volMbar, cuDimMk, cuDimMm, accWidth, cacheWidth, hostMbar,
-        tensorSplit.sizeMbar, num_iter, mlp, gld_tran, gst_tran, gld_req,
-        gst_req, cl_full_l2, cl_part_l2);
+        prop.warpSize, false, numPosMbarSample, tensorSplit.volMm,
+        tensorSplit.volMk, tensorSplit.volMbar, cuDimMk, cuDimMm, accWidth,
+        cacheWidth, hostMbar, tensorSplit.sizeMbar, num_iter, mlp, gld_tran,
+        gst_tran, gld_req, gst_req, cl_full_l2, cl_part_l2);
 #ifdef ENABLE_NVTOOLS
     gpuRangeStop();
 #endif
@@ -1106,10 +1106,10 @@ bool gputtPlan_t::countCycles(gpuDeviceProp_t &prop,
     gpuRangeStart("countTiledGlTransactions (copy)");
 #endif
     countTiledGlTransactions(
-        true, numPosMbarSample, tensorSplit.volMm, tensorSplit.volMkBar,
-        tensorSplit.volMbar, cuDimMk, cuDimMm, accWidth, cacheWidth, hostMbar,
-        tensorSplit.sizeMbar, num_iter, mlp, gld_tran, gst_tran, gld_req,
-        gst_req, cl_full_l2, cl_part_l2);
+        prop.warpSize, true, numPosMbarSample, tensorSplit.volMm,
+        tensorSplit.volMkBar, tensorSplit.volMbar, cuDimMk, cuDimMm, accWidth,
+        cacheWidth, hostMbar, tensorSplit.sizeMbar, num_iter, mlp, gld_tran,
+        gst_tran, gld_req, gst_req, cl_full_l2, cl_part_l2);
 #ifdef ENABLE_NVTOOLS
     gpuRangeStop();
 #endif

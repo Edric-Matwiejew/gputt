@@ -57,7 +57,7 @@ void getDeviceProp(int &deviceID, gpuDeviceProp_t &prop) {
   if (it == deviceProps.end()) {
     // Get device properties and store it for later use
     gpuCheck(gpuGetDeviceProperties(&prop, deviceID));
-    gputtKernelSetSharedMemConfig();
+    gputtKernelSetSharedMemConfig(prop.warpSize);
     deviceProps.insert({deviceID, prop});
   } else {
     prop = it->second;

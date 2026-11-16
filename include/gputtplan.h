@@ -29,21 +29,27 @@ SOFTWARE.
 #include "gputt_internal.h"
 
 #include <list>
+#include <type_traits>
 #include <vector>
 
-// Size of the shared memory tile used in some algorithms.
-// This parameter is associated with the warp (wavefront) size,
-// and is therefore device-specific.
-#if defined(__CUDACC__)
-// Needs to be a literal constant for CUDA version, due to the use
-// in the __launch_bounds__ attribute. HIP probably ignores __launch_bounds__,
-// and therefore has no problem with it.
-#define TILEDIM 32
-#elif defined(__HIPCC__)
-// AMD has released GPUs with different wavefront sizes: 64 and 32.
-// So it's important to have the warpSize here as a parameter.
-#define TILEDIM warpSize
+// Select a compile-time tile wrap/wavefront size based on the device size or
+// the wrap/wavefront size specified in a launch configuration. CUDA always uses 32.
+// Tiled kernels require that the warp/wavefront sizes matches the native warp size.
+template <typename Function>
+bool gputtDispatchTileDim(const int tileDim, Function &&function) {
+  switch (tileDim) {
+  case 32:
+    function(std::integral_constant<int, 32>{});
+    return true;
+#if defined(__HIPCC__)
+  case 64:
+    function(std::integral_constant<int, 64>{});
+    return true;
 #endif
+  default:
+    return false;
+  }
+}
 
 const int TILEROWS = 8;
 
@@ -100,14 +106,14 @@ public:
               const int *dim, const int *permutation);
 
   // Number of elements in shared memory space
-  size_t shmem() const;
+  size_t shmem(const int tileDim) const;
 
   // Number of elements in Mmk that are used effectively
-  size_t volMmkUsed() const;
+  size_t volMmkUsed(const int tileDim) const;
 
   // Bytes the shared memory space that needs to be allocated
   // (can be larger than volShmem() due to padding)
-  size_t shmemAlloc(gputtDataType dtype) const;
+  size_t shmemAlloc(gputtDataType dtype, const int tileDim) const;
 };
 
 class LaunchConfig {
