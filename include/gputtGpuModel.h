@@ -75,7 +75,7 @@ void countPackedShTransactionsRef(const int warpSize, const int bankWidth,
                                   int &sld_tran, int &sst_tran, int &sld_req,
                                   int &sst_req);
 
-void countTiledGlTransactions(const bool leadVolSame,
+void countTiledGlTransactions(const int tileDim, const bool leadVolSame,
                               const int numPosMbarSample, const int volMm,
                               const int volMk, const int volMbar, const int cIn,
                               const int cOut, const int accWidth,

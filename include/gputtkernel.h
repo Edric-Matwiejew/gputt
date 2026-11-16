@@ -26,7 +26,7 @@ SOFTWARE.
 #define GPUTTKERNEL_H
 #include "gputtplan.h"
 
-void gputtKernelSetSharedMemConfig();
+void gputtKernelSetSharedMemConfig(const int tileDim);
 
 int gputtKernelLaunchConfiguration(const gputtDataType dtype, const TensorSplit &ts,
                                    const int deviceID,

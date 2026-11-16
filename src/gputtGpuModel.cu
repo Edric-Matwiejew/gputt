@@ -554,7 +554,8 @@ void countPackedShTransactionsRef(const int warpSize, const int bankWidth,
 //
 // Count number of global memory transactions for Tiled method
 //
-void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
+void countTiledGlTransactions(const int tileDim, const bool isCopy,
+                              const int numPosMbarSample,
                               const int volMm, const int volMk,
                               const int volMbar, const int cIn, const int cOut,
                               const int accWidth, const int cacheWidth,
@@ -563,7 +564,7 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
                               int &gld_tran, int &gst_tran, int &gld_req,
                               int &gst_req, int &cl_full, int &cl_part) {
 
-  int ntile = ((volMm - 1) / TILEDIM + 1) * ((volMk - 1) / TILEDIM + 1);
+  int ntile = ((volMm - 1) / tileDim + 1) * ((volMk - 1) / tileDim + 1);
   num_iter = volMbar * ntile;
 
   gld_tran = 0;
@@ -578,29 +579,29 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
   std::uniform_int_distribution<int> distribution(0, volMbar - 1);
 
   // Number of elements inside the horizontally clipped tiles
-  int h = volMm % TILEDIM;
+  int h = volMm % tileDim;
   // Number of elements inside the vertically clipped tiles
-  int v = volMk % TILEDIM;
+  int v = volMk % tileDim;
 
   // Number of full tiles
-  int ntile_full = (volMm / TILEDIM) * (volMk / TILEDIM);
+  int ntile_full = (volMm / tileDim) * (volMk / tileDim);
   // Number of tiles that are clipped in horizontal direction
-  int ntile_horz = (h > 0) * (volMk / TILEDIM);
+  int ntile_horz = (h > 0) * (volMk / tileDim);
   // Number of tiles that are clipped in vertical direction
-  int ntile_vert = (v > 0) * (volMm / TILEDIM);
+  int ntile_vert = (v > 0) * (volMm / tileDim);
   // Number of corner tiles (0 or 1)
   int ntile_corn = (h > 0) * (v > 0);
 
   if (isCopy) {
     // Total number of memory level parallelism
-    int mlp_tot = (TILEDIM / TILEROWS) * (ntile_full + ntile_horz) +
+    int mlp_tot = (tileDim / TILEROWS) * (ntile_full + ntile_horz) +
                   ((v - 1) / TILEROWS + 1) * (ntile_vert + ntile_corn);
     // Average memory level parallelism per tile
     mlp = (float)mlp_tot / (float)ntile;
   } else {
     // Total number of memory level parallelism
     int mlp_tot =
-        (TILEDIM / TILEROWS) * (2 * ntile_full + ntile_horz + ntile_vert) +
+        (tileDim / TILEROWS) * (2 * ntile_full + ntile_horz + ntile_vert) +
         ((v - 1) / TILEROWS + 1) * (ntile_vert + ntile_corn) +
         ((h - 1) / TILEROWS + 1) * (ntile_horz + ntile_corn);
     // Average memory level parallelism per tile
@@ -620,7 +621,7 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
     // sizeMbar, posMbarInV, posMbarOutV);
 
     // Reads happen at {posMbarIn, posMbarIn + cuDimMk, posMbarIn + 2*cuDimMk,
-    // ..., posMbarIn + (TILEDIM - 1)*cuDimMk} Each tile has same number of
+    // ..., posMbarIn + (tileDim - 1)*cuDimMk} Each tile has same number of
     // transactions
 
     if (ntile_full > 0) {
@@ -628,13 +629,13 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
       int gst_tran_tmp = 0;
       int cl_full_tmp = 0;
       int cl_part_tmp = 0;
-      for (int i = 0; i < TILEDIM; i++) {
+      for (int i = 0; i < tileDim; i++) {
         int posIn = posMbarIn + i * cIn;
         int posOut = posMbarOut + i * cOut;
-        gld_tran_tmp += glTransactions(posIn, TILEDIM, accWidth);
-        gst_tran_tmp += glTransactions(posOut, TILEDIM, accWidth);
+        gld_tran_tmp += glTransactions(posIn, tileDim, accWidth);
+        gst_tran_tmp += glTransactions(posOut, tileDim, accWidth);
         int cl_full_tmp2, cl_part_tmp2;
-        countCacheLines(posOut, TILEDIM, cacheWidth, cl_full_tmp2,
+        countCacheLines(posOut, tileDim, cacheWidth, cl_full_tmp2,
                         cl_part_tmp2);
         cl_full_tmp += cl_full_tmp2;
         cl_part_tmp += cl_part_tmp2;
@@ -651,7 +652,7 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
       int cl_full_tmp = 0;
       int cl_part_tmp = 0;
       if (isCopy) {
-        for (int i = 0; i < TILEDIM; i++) {
+        for (int i = 0; i < tileDim; i++) {
           int posIn = posMbarIn + i * cIn;
           int posOut = posMbarOut + i * cOut;
           gld_tran_tmp += glTransactions(posIn, h, accWidth);
@@ -662,15 +663,15 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
           cl_part_tmp += cl_part_tmp2;
         }
       } else {
-        for (int i = 0; i < TILEDIM; i++) {
+        for (int i = 0; i < tileDim; i++) {
           int posIn = posMbarIn + i * cIn;
           gld_tran_tmp += glTransactions(posIn, h, accWidth);
         }
         for (int i = 0; i < h; i++) {
           int posOut = posMbarOut + i * cOut;
-          gst_tran_tmp += glTransactions(posOut, TILEDIM, accWidth);
+          gst_tran_tmp += glTransactions(posOut, tileDim, accWidth);
           int cl_full_tmp2, cl_part_tmp2;
-          countCacheLines(posOut, TILEDIM, cacheWidth, cl_full_tmp2,
+          countCacheLines(posOut, tileDim, cacheWidth, cl_full_tmp2,
                           cl_part_tmp2);
           cl_full_tmp += cl_full_tmp2;
           cl_part_tmp += cl_part_tmp2;
@@ -691,10 +692,10 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
         for (int i = 0; i < v; i++) {
           int posIn = posMbarIn + i * cIn;
           int posOut = posMbarOut + i * cOut;
-          gld_tran_tmp += glTransactions(posIn, TILEDIM, accWidth);
-          gst_tran_tmp += glTransactions(posOut, TILEDIM, accWidth);
+          gld_tran_tmp += glTransactions(posIn, tileDim, accWidth);
+          gst_tran_tmp += glTransactions(posOut, tileDim, accWidth);
           int cl_full_tmp2, cl_part_tmp2;
-          countCacheLines(posOut, TILEDIM, cacheWidth, cl_full_tmp2,
+          countCacheLines(posOut, tileDim, cacheWidth, cl_full_tmp2,
                           cl_part_tmp2);
           cl_full_tmp += cl_full_tmp2;
           cl_part_tmp += cl_part_tmp2;
@@ -702,9 +703,9 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
       } else {
         for (int i = 0; i < v; i++) {
           int posIn = posMbarIn + i * cIn;
-          gld_tran_tmp += glTransactions(posIn, TILEDIM, accWidth);
+          gld_tran_tmp += glTransactions(posIn, tileDim, accWidth);
         }
-        for (int i = 0; i < TILEDIM; i++) {
+        for (int i = 0; i < tileDim; i++) {
           int posOut = posMbarOut + i * cOut;
           gst_tran_tmp += glTransactions(posOut, v, accWidth);
           int cl_full_tmp2, cl_part_tmp2;
@@ -757,13 +758,13 @@ void countTiledGlTransactions(const bool isCopy, const int numPosMbarSample,
   }
   // Requests
   if (isCopy) {
-    gld_req = num_iposMbar * (TILEDIM * ntile_full + TILEDIM * ntile_horz +
+    gld_req = num_iposMbar * (tileDim * ntile_full + tileDim * ntile_horz +
                               v * ntile_vert + v * ntile_corn);
     gst_req = gld_req;
   } else {
-    gld_req = num_iposMbar * (TILEDIM * ntile_full + TILEDIM * ntile_horz +
+    gld_req = num_iposMbar * (tileDim * ntile_full + tileDim * ntile_horz +
                               v * ntile_vert + v * ntile_corn);
-    gst_req = num_iposMbar * (TILEDIM * ntile_full + TILEDIM * ntile_vert +
+    gst_req = num_iposMbar * (tileDim * ntile_full + tileDim * ntile_vert +
                               h * ntile_horz + h * ntile_corn);
   }
 }
